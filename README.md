@@ -1,161 +1,214 @@
-# memCore - Memory-as-a-Service for AI Agents
+# memCore — Memory-as-a-Service (MaaS)
 
-A production-grade backend platform that provides persistent, queryable, and multi-scope memory for AI agents.
-
-## Project Overview
-
-MaaS (Memory-as-a-Service) enables AI agents to:
-- Store and retrieve long-term semantic memory using embeddings
-- Manage short-term working memory with fast access
-- Share knowledge across multiple agents
-- Resolve memory conflicts intelligently
-- Handle memory lifecycle with TTL and decay mechanisms
+A production-grade backend platform that provides persistent, semantically-searchable, scoped memory for AI agents.
 
 ## Architecture
 
 ```
-Agents → API Gateway → Memory Services
-                    ↓
-        ┌──────────┼──────────┐
-        ↓          ↓          ↓
-    Postgres   Vector DB   Redis
-   (metadata) (embeddings) (working memory)
+Agents / Services
+     │  (JWT Bearer / X-API-Key)
+     ▼
+FastAPI (app.main)
+     ├── AuthMiddleware       ← populates request.state.auth_context
+     ├── RateLimitMiddleware  ← 100 req/min per IP
+     └── RequestLoggingMiddleware + Prometheus metrics
+           │
+           ├── /auth/*          ← Registration, login, JWT, API keys
+           ├── /memory/*        ← CRUD + hybrid semantic search (Auth required)
+           ├── /working/*       ← Session memory (Redis)
+           ├── /conflicts/*     ← Conflict detection & resolution (Auth required)
+           └── /health/         ← Service health checks
+                 │
+       ┌─────────┼──────────┐
+       ▼         ▼          ▼
+  PostgreSQL   Qdrant     Redis
+  (metadata)  (vectors)  (working mem)
 ```
 
 ## Tech Stack
 
-- **Language**: Python 3.11+
-- **Framework**: FastAPI
-- **Metadata Store**: PostgreSQL
-- **Vector Store**: Qdrant / pgvector
-- **Working Memory**: Redis
-- **Async Jobs**: Celery / RQ
-- **Containerization**: Docker
-- **Observability**: Prometheus + Grafana
+| Component | Technology |
+|-----------|-----------|
+| API | FastAPI 0.109, Uvicorn |
+| Auth | JWT (python-jose) + API Keys (SHA-256) |
+| DB | PostgreSQL + SQLAlchemy 2 (async) |
+| Vectors | Qdrant (AsyncQdrantClient) |
+| Embeddings | sentence-transformers `all-MiniLM-L6-v2` |
+| Working Memory | Redis (asyncio) |
+| Background Jobs | Celery + Redis broker |
+| Migrations | Alembic |
+| Metrics | Prometheus |
+
+## Quick Start (Local)
+
+### 1. Start infrastructure
+
+```bash
+# Start Postgres (port 5433), Redis (6379), Qdrant (6333)
+docker-compose up -d postgres redis qdrant
+```
+
+### 2. Install dependencies
+
+```bash
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# Linux/Mac:
+source venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 3. Configure environment
+
+A ready-to-use `.env` file is included. Edit if needed:
+
+```bash
+# Key settings already configured:
+# DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/maas_db
+# REDIS_URL=redis://localhost:6379/0
+# QDRANT_HOST=localhost
+# SECRET_KEY=dev-secret-key-change-in-production-32chars!!
+```
+
+### 4. Run migrations
+
+```bash
+alembic upgrade head
+```
+
+### 5. Start the API
+
+```bash
+uvicorn app.main:app --reload
+```
+
+API available at: http://localhost:8000  
+Swagger docs: http://localhost:8000/docs
+
+### 6. Run end-to-end tests
+
+```bash
+python scripts/test_api.py
+```
+
+---
+
+## API Reference
+
+### Authentication
+
+All `/memory/*` and `/conflicts/*` endpoints require:
+- `Authorization: Bearer <jwt_token>` — from `/auth/login`
+- `X-API-Key: maas_<key>` — from `/auth/api-keys`
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/register` | POST | Register a new user |
+| `/auth/login` | POST | Login → JWT tokens |
+| `/auth/refresh` | POST | Refresh access token |
+| `/auth/logout` | POST | Logout (revoke token) |
+| `/auth/me` | GET | Current user profile |
+| `/auth/api-keys` | POST | Create API key |
+| `/auth/api-keys` | GET | List org API keys |
+| `/auth/api-keys/{id}` | DELETE | Revoke API key |
+
+### Memory Operations
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/memory/` | POST | Create memory + embed to Qdrant |
+| `/memory/{id}` | GET | Get memory (increments usage) |
+| `/memory/{id}` | PUT | Update memory (re-embeds if content changed) |
+| `/memory/{id}` | DELETE | Soft-delete + remove vector |
+| `/memory/search` | POST | Hybrid semantic search |
+
+**Search scoring formula:**
+```
+score = 0.6 × semantic + 0.2 × recency + 0.1 × confidence + 0.1 × usage
+```
+
+### Working Memory (Redis)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/working/{session_id}` | PUT | Set session data (with TTL) |
+| `/working/{session_id}` | GET | Get session data |
+| `/working/{session_id}` | DELETE | Clear session |
+
+### Conflict Resolution
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/conflicts/resolve` | POST | Resolve conflicts with strategy |
+| `/conflicts/` | GET | List conflicting memories |
+| `/conflicts/flag` | POST | Flag memories as conflicting |
+
+**Resolution strategies:**
+- `latest_wins` — keep most recent
+- `confidence_weighted` — keep highest confidence
+- `source_trust` — keep most-used source
+- `merge_flag` — flag all for human merge
+- `manual_review` — flag, no deletions
+
+### Health & Metrics
+
+| Endpoint | Description |
+|----------|-------------|
+| `/health/` | Service health (Postgres, Redis, Qdrant) |
+| `/metrics` | Prometheus metrics |
+
+---
+
+## Memory Scopes
+
+```
+global  ← accessible to all agents
+  └── org  ← accessible within an organisation
+       └── team  ← accessible to a team
+            └── agent  ← private to one agent
+```
 
 ## Project Structure
 
 ```
 memCore/
 ├── app/
-│   ├── configs/        # Application configuration
-│   ├── models/         # Database schemas and Pydantic models
-│   ├── repositories/   # Database interaction layer
-│   ├── services/       # Business logic
-│   ├── controllers/    # Route handlers
-│   ├── middlewares/    # Custom middlewares
-│   ├── validators/     # Request/response validators
-│   ├── interfaces/     # Abstract interfaces and protocols
-│   ├── decorators/     # Custom decorators
-│   └── utils/          # Utility functions
-├── tests/              # Test suite
-├── scripts/            # Utility scripts
-├── docker/             # Docker configuration
-└── requirements.txt    # Python dependencies
+│   ├── configs/         # Settings, DB, Redis, Qdrant
+│   ├── controllers/     # Route handlers (auth, memory, working, conflicts, health)
+│   ├── services/        # Business logic (auth, memory, embedding, conflict)
+│   ├── repositories/    # DB/Redis access layer
+│   ├── models/          # SQLAlchemy models + Pydantic schemas
+│   ├── middlewares/     # Auth, rate limit, logging
+│   ├── dependencies/    # FastAPI auth dependencies
+│   ├── workers/         # Celery app + tasks
+│   ├── interfaces/      # Abstract base classes
+│   ├── decorators/      # Prometheus metrics decorator
+│   └── utils/           # Encryption, transaction management
+├── alembic/             # Database migrations
+│   └── versions/        # 001 (memory), 002 (auth), 003 (audit)
+├── docker/              # Dockerfile
+├── scripts/
+│   └── test_api.py      # End-to-end test runner
+├── .env                 # Local dev configuration
+├── docker-compose.yml   # Infrastructure services
+└── requirements.txt
 ```
 
-## Getting Started
+## Celery Worker (Optional)
 
-### Prerequisites
+For async background embedding (decouples embedding from request thread):
 
-- Python 3.11+
-- Docker and Docker Compose
-- PostgreSQL (or via Docker)
-- Redis (or via Docker)
-
-### Installation
-
-1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd memCore
+celery -A app.workers.celery_app worker --loglevel=info
+celery -A app.workers.celery_app beat --loglevel=info  # periodic tasks
 ```
 
-2. Create virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-5. Start services with Docker:
-```bash
-docker-compose up -d
-```
-
-6. Run the application:
-```bash
-uvicorn app.main:app --reload
-```
-
-## API Endpoints
-
-### Memory Operations
-- `POST /memory` - Write new memory
-- `POST /memory/search` - Search memories
-- `GET /memory/{id}` - Get specific memory
-- `DELETE /memory/{id}` - Delete memory
-
-### Working Memory
-- `PUT /working/{session}` - Update working memory
-- `GET /working/{session}` - Get working memory
-
-### Conflict Resolution
-- `POST /memory/resolve` - Resolve memory conflicts
-
-## Features
-
-- ✅ Semantic memory with vector embeddings
-- ✅ Fast working memory via Redis
-- ✅ Hybrid retrieval (semantic + metadata + recency)
-- ✅ Multi-agent namespacing (agent/team/org/global)
-- ✅ Conflict detection and resolution
-- ✅ TTL and memory decay
-- ✅ Async embedding pipeline
-- ✅ Observability and metrics
-
-## Development
-
-Run tests:
-```bash
-pytest
-```
-
-Format code:
-```bash
-black app/
-isort app/
-```
-
-Lint:
-```bash
-flake8 app/
-mypy app/
-```
-
-## Deployment
-
-See [deployment documentation](docs/deployment.md) for detailed instructions on deploying to Fly.io, Render, or Railway.
+Scheduled tasks:
+- Every 6h: cleanup expired memories
+- Every 12h: cleanup expired token blacklist
 
 ## License
 
 MIT
-
-## Resume Value
-
-This project demonstrates:
-- Distributed backend design
-- Hybrid storage architecture
-- Async processing patterns
-- AI infrastructure patterns
-- Multi-tenant API architecture

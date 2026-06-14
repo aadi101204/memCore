@@ -2,9 +2,13 @@
 from app.controllers.memory_controller import router as memory_router
 from app.controllers.working_memory_controller import router as working_memory_router
 from app.controllers.health_controller import router as health_router
+from app.controllers.auth_controller import router as auth_router
+from app.controllers.conflict_controller import router as conflict_router
 
 __all__ = [
     "memory_router",
     "working_memory_router",
     "health_router",
+    "auth_router",
+    "conflict_router",
 ]

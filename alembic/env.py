@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.configs.database import Base
 from app.configs.settings import settings
 from app.models.memory import MemoryRecord, MemoryLink
+from app.models.auth_models import User, ApiKey, Permission, TokenBlacklist
+from app.models.audit_models import AuditLog
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

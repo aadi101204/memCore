@@ -8,12 +8,11 @@ from uuid import UUID
 from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.interfaces.repository import IRepository
 from app.models.auth_models import User, ApiKey, Permission, TokenBlacklist
 
 
-class AuthRepository(IRepository):
-    """Repository for authentication operations."""
+class AuthRepository:
+    """Repository for authentication operations (does not extend IRepository — domain-specific)."""
     
     def __init__(self, session: AsyncSession):
         """Initialize repository with database session."""

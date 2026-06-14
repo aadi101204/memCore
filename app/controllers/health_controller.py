@@ -1,9 +1,7 @@
-"""
-Health check controller.
-"""
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 import redis.asyncio as redis
 
@@ -32,7 +30,7 @@ async def health_check(
     
     # Check database
     try:
-        await db.execute("SELECT 1")
+        await db.execute(text("SELECT 1"))
         services["database"] = "healthy"
     except Exception:
         services["database"] = "unhealthy"
